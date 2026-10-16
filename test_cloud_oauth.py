@@ -2,19 +2,25 @@ import json
 from urllib.parse import parse_qs, urlparse
 
 from google.auth.exceptions import RefreshError
+from oauthlib.oauth2 import InvalidGrantError, MissingTokenError
 
 from cloud_oauth import (
     CLOUD_GMAIL_SCOPES,
+    CONSUMED_CALLBACKS_SESSION_KEY,
+    PRODUCTION_GMAIL_REDIRECT_URI,
     SESSION_CREDENTIAL_KEY,
     CloudOAuthConfig,
     OAuthSecurityError,
     ReauthorizationRequired,
     bind_session_identity,
     build_authorization_url,
+    claim_oauth_callback_state,
     create_signed_state,
     exchange_authorization_code,
     load_session_credentials,
+    oauth_failure_diagnostic,
     pkce_challenge,
+    sanitize_oauth_error_code,
     store_session_credentials,
     validate_signed_state,
 )
@@ -92,17 +98,37 @@ def test_authorization_url_uses_exact_redirect_state_nonce_and_pkce():
         nonce_factory=lambda: "p" * 32,
     )
     query = parse_qs(urlparse(url).query)
-    assert query["redirect_uri"] == ["https://ai-gmail-cleaner.streamlit.app/"]
+    assert query["redirect_uri"] == [PRODUCTION_GMAIL_REDIRECT_URI]
     assert query["code_challenge_method"] == ["S256"]
     assert query["nonce"] == ["p" * 32]
     assert query["access_type"] == ["offline"]
     assert query["prompt"] == ["consent"]
+    assert "include_granted_scopes" not in query
     assert set(query["scope"][0].split()) == set(CLOUD_GMAIL_SCOPES)
     state_payload = validate_signed_state(
         query["state"][0], config(), IDENTITY_SUB, IDENTITY_EMAIL, now=NOW
     )
     assert len(query["code_challenge"][0]) == 43
     assert state_payload["redirect_uri"] == config().redirect_uri
+
+
+def test_cloud_config_requires_exact_production_redirect_uri():
+    for invalid_redirect in (
+        "https://ai-gmail-cleaner.streamlit.app",
+        "https://ai-gmail-cleaner.streamlit.app/oauth2callback",
+        "https://other-app.streamlit.app/",
+    ):
+        try:
+            CloudOAuthConfig(
+                client_id="web-client.apps.googleusercontent.com",
+                client_secret="placeholder-client-secret",
+                redirect_uri=invalid_redirect,
+                state_secret="s" * 48,
+            ).validate()
+        except OAuthSecurityError:
+            pass
+        else:
+            raise AssertionError("Cloud Gmail redirect URI must match production exactly")
 
 
 def test_code_exchange_validates_pkce_nonce_and_authorized_email():
@@ -194,6 +220,111 @@ def test_code_exchange_rejects_a_different_gmail_identity():
         raise AssertionError("A Gmail grant for another identity must be rejected")
 
 
+def test_callback_state_is_claimed_before_one_token_exchange_and_cannot_replay():
+    state = create_signed_state(
+        config(), IDENTITY_SUB, IDENTITY_EMAIL, now=NOW, nonce_factory=lambda: "r" * 32
+    )
+    session = {}
+    claim_oauth_callback_state(
+        session, state, config(), IDENTITY_SUB, IDENTITY_EMAIL, now=NOW
+    )
+    assert len(session[CONSUMED_CALLBACKS_SESSION_KEY]) == 1
+    assert state not in session[CONSUMED_CALLBACKS_SESSION_KEY]
+
+    fetch_count = 0
+
+    class FakeFlow:
+        redirect_uri = None
+        code_verifier = None
+        credentials = FakeCredentials()
+
+        def fetch_token(self, *, code):
+            nonlocal fetch_count
+            assert code == "one-time-code"
+            fetch_count += 1
+
+    exchange_authorization_code(
+        config(),
+        IDENTITY_SUB,
+        IDENTITY_EMAIL,
+        "one-time-code",
+        state,
+        now=NOW,
+        flow_factory=lambda *args, **kwargs: FakeFlow(),
+        id_token_verifier=lambda *args, **kwargs: {
+            "email": IDENTITY_EMAIL,
+            "email_verified": True,
+            "nonce": "r" * 32,
+        },
+        request_factory=lambda: object(),
+    )
+    assert fetch_count == 1
+
+    try:
+        claim_oauth_callback_state(
+            session, state, config(), IDENTITY_SUB, IDENTITY_EMAIL, now=NOW
+        )
+    except OAuthSecurityError:
+        pass
+    else:
+        raise AssertionError("A consumed OAuth callback must not be replayable")
+    assert fetch_count == 1
+
+
+def test_token_exchange_failures_have_only_sanitized_diagnostics():
+    scope_warning = Warning(
+        "scope detail containing an authorization code and token must never be rendered"
+    )
+    scope_warning.token = {"access_token": "sensitive-access-token"}
+    scope_warning.old_scope = list(CLOUD_GMAIL_SCOPES)
+    scope_warning.new_scope = [*CLOUD_GMAIL_SCOPES, "unexpected.extra.scope"]
+
+    assert oauth_failure_diagnostic(scope_warning) == ("Warning", "scope_mismatch")
+    assert oauth_failure_diagnostic(MissingTokenError(description="sensitive")) == (
+        "MissingTokenError",
+        "missing_token",
+    )
+    assert oauth_failure_diagnostic(InvalidGrantError(description="sensitive")) == (
+        "InvalidGrantError",
+        "invalid_grant",
+    )
+    assert sanitize_oauth_error_code("access_denied") == "access_denied"
+    assert sanitize_oauth_error_code("secret-bearing-unknown-value") == "unexpected_error"
+
+
+def test_scope_mismatch_from_fetch_token_is_classified_without_sensitive_details():
+    state = create_signed_state(
+        config(), IDENTITY_SUB, IDENTITY_EMAIL, now=NOW, nonce_factory=lambda: "w" * 32
+    )
+
+    class ScopeMismatchFlow:
+        redirect_uri = None
+        code_verifier = None
+
+        def fetch_token(self, *, code):
+            assert code == "one-time-code"
+            warning = Warning("sensitive scope and token response details")
+            warning.token = {"access_token": "sensitive-access-token"}
+            warning.old_scope = list(CLOUD_GMAIL_SCOPES)
+            warning.new_scope = [*CLOUD_GMAIL_SCOPES, "unexpected.extra.scope"]
+            raise warning
+
+    try:
+        exchange_authorization_code(
+            config(),
+            IDENTITY_SUB,
+            IDENTITY_EMAIL,
+            "one-time-code",
+            state,
+            now=NOW,
+            flow_factory=lambda *args, **kwargs: ScopeMismatchFlow(),
+        )
+    except Warning as exc:
+        assert oauth_failure_diagnostic(exc) == ("Warning", "scope_mismatch")
+    else:
+        raise AssertionError("A token scope mismatch must fail closed")
+
+
 def test_session_credentials_are_isolated_by_authenticated_user():
     session = {"messages": [{"id": "private-message"}], "whitelist": ["private.example"]}
     store_session_credentials(
@@ -277,8 +408,12 @@ if __name__ == "__main__":
     tests = [
         test_signed_state_is_user_bound_tamper_evident_and_short_lived,
         test_authorization_url_uses_exact_redirect_state_nonce_and_pkce,
+        test_cloud_config_requires_exact_production_redirect_uri,
         test_code_exchange_validates_pkce_nonce_and_authorized_email,
         test_code_exchange_rejects_a_different_gmail_identity,
+        test_callback_state_is_claimed_before_one_token_exchange_and_cannot_replay,
+        test_token_exchange_failures_have_only_sanitized_diagnostics,
+        test_scope_mismatch_from_fetch_token_is_classified_without_sensitive_details,
         test_session_credentials_are_isolated_by_authenticated_user,
         test_expired_credentials_refresh_and_revocation_fails_closed,
         test_identity_change_clears_user_mailbox_state,

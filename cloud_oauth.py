@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ from google_auth_oauthlib.flow import Flow
 
 
 GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
+PRODUCTION_GMAIL_REDIRECT_URI = "https://ai-gmail-cleaner.streamlit.app/"
 CLOUD_GMAIL_SCOPES = (
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
@@ -31,6 +33,31 @@ CLOUD_GMAIL_SCOPES = (
 )
 STATE_MAX_AGE_SECONDS = 10 * 60
 SESSION_CREDENTIAL_KEY = "cloud_gmail_credentials"
+CONSUMED_CALLBACKS_SESSION_KEY = "consumed_gmail_oauth_callbacks"
+MAX_CONSUMED_CALLBACKS = 32
+SAFE_OAUTH_ERROR_CODES = frozenset(
+    {
+        "access_denied",
+        "consent_required",
+        "google_auth_error",
+        "interaction_required",
+        "invalid_client",
+        "invalid_grant",
+        "invalid_request",
+        "invalid_scope",
+        "login_required",
+        "missing_token",
+        "scope_mismatch",
+        "security_validation_failed",
+        "server_error",
+        "temporarily_unavailable",
+        "transport_error",
+        "unauthorized_client",
+        "unexpected_error",
+        "unsupported_grant_type",
+        "unsupported_response_type",
+    }
+)
 USER_DATA_SESSION_KEYS = (
     SESSION_CREDENTIAL_KEY,
     "messages",
@@ -46,6 +73,34 @@ class OAuthSecurityError(ValueError):
 
 class ReauthorizationRequired(RuntimeError):
     """Raised when the user must grant Gmail access again."""
+
+
+def sanitize_oauth_error_code(value: object) -> str:
+    """Return only an allowlisted OAuth error identifier."""
+    candidate = str(value or "").strip().casefold()
+    return candidate if candidate in SAFE_OAUTH_ERROR_CODES else "unexpected_error"
+
+
+def oauth_failure_diagnostic(exc: BaseException) -> tuple[str, str]:
+    """Describe an OAuth failure without rendering its message or attached data."""
+    exception_type = type(exc).__name__
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", exception_type):
+        exception_type = "Exception"
+
+    if isinstance(exc, Warning) and all(
+        hasattr(exc, attribute) for attribute in ("token", "old_scope", "new_scope")
+    ):
+        error_code = "scope_mismatch"
+    else:
+        error_code = sanitize_oauth_error_code(getattr(exc, "error", ""))
+        if error_code == "unexpected_error":
+            if isinstance(exc, OAuthSecurityError):
+                error_code = "security_validation_failed"
+            elif isinstance(exc, GoogleAuthError):
+                error_code = "google_auth_error"
+            elif isinstance(exc, OSError):
+                error_code = "transport_error"
+    return exception_type, error_code
 
 
 def _b64url_encode(value: bytes) -> str:
@@ -97,6 +152,10 @@ class CloudOAuthConfig:
             or parsed.fragment
         ):
             raise OAuthSecurityError("The Gmail OAuth redirect URI must be an HTTPS URL without query or fragment data.")
+        if not hmac.compare_digest(self.redirect_uri, PRODUCTION_GMAIL_REDIRECT_URI):
+            raise OAuthSecurityError(
+                "The Gmail OAuth redirect URI does not match the production callback."
+            )
         if len(self.state_secret.encode("utf-8")) < 32:
             raise OAuthSecurityError("The OAuth state secret must contain at least 32 bytes.")
 
@@ -184,6 +243,38 @@ def validate_signed_state(
     return payload
 
 
+def claim_oauth_callback_state(
+    session: MutableMapping[str, Any],
+    state: str,
+    config: CloudOAuthConfig,
+    identity_sub: str,
+    identity_email: str,
+    *,
+    now: int | None = None,
+) -> dict[str, Any]:
+    """Validate and atomically claim a callback state once per browser session."""
+    payload = validate_signed_state(
+        state, config, identity_sub, identity_email, now=now
+    )
+    fingerprint = hmac.new(
+        config.state_secret.encode("utf-8"),
+        b"consumed-gmail-oauth-callback\0" + state.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    consumed_value = session.get(CONSUMED_CALLBACKS_SESSION_KEY, [])
+    consumed = consumed_value if isinstance(consumed_value, list) else []
+    if any(
+        isinstance(previous, str) and hmac.compare_digest(previous, fingerprint)
+        for previous in consumed
+    ):
+        raise OAuthSecurityError("The OAuth callback has already been consumed.")
+    session[CONSUMED_CALLBACKS_SESSION_KEY] = [
+        *[value for value in consumed if isinstance(value, str)],
+        fingerprint,
+    ][-MAX_CONSUMED_CALLBACKS:]
+    return payload
+
+
 def derive_pkce_verifier(config: CloudOAuthConfig, nonce: str, identity_sub: str) -> str:
     """Derive a callback-recoverable PKCE verifier from signed state claims."""
     material = f"gmail-pkce\0{nonce}\0{identity_sub}".encode("utf-8")
@@ -236,7 +327,6 @@ def build_authorization_url(
     flow = _flow_for_state(config, state, payload, flow_factory)
     authorization_url, returned_state = flow.authorization_url(
         access_type="offline",
-        include_granted_scopes="true",
         prompt="consent",
         login_hint=_normalized_email(identity_email),
         nonce=payload["nonce"],

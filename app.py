@@ -1,6 +1,7 @@
 """AI Gmail Cleaner: local Desktop OAuth and secure Streamlit Cloud OAuth."""
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -20,11 +21,13 @@ from cloud_oauth import (
     ReauthorizationRequired,
     bind_session_identity,
     build_authorization_url,
+    claim_oauth_callback_state,
     clear_user_gmail_state,
     exchange_authorization_code,
     load_session_credentials,
+    oauth_failure_diagnostic,
+    sanitize_oauth_error_code,
     store_session_credentials,
-    validate_signed_state,
 )
 from drag_select_table import drag_select_table
 from gmail_client import fetch_inbox
@@ -36,6 +39,7 @@ TOKEN = ROOT / "token.json"
 CLIENT = ROOT / "credentials.json"
 SETTINGS = ROOT / "settings.json"
 DESKTOP_SCOPES = [GMAIL_MODIFY_SCOPE]
+LOGGER = logging.getLogger(__name__)
 
 st.set_page_config(page_title="AI Gmail Cleaner", page_icon="📬", layout="wide")
 st.title("📬 AI Gmail Cleaner")
@@ -150,11 +154,23 @@ def handle_cloud_oauth_callback(config, identity):
 
     st.query_params.clear()
     try:
+        claim_oauth_callback_state(
+            st.session_state,
+            state,
+            config,
+            identity["sub"],
+            identity["email"],
+        )
         if oauth_error:
-            validate_signed_state(state, config, identity["sub"], identity["email"])
+            safe_error = sanitize_oauth_error_code(oauth_error)
+            LOGGER.warning(
+                "gmail_oauth_authorization_not_completed oauth_error=%s",
+                safe_error,
+            )
             st.session_state.oauth_notice = (
                 "warning",
-                "Gmail authorization was not completed. No mailbox action was taken.",
+                "Gmail authorization was not completed "
+                f"(oauth_error={safe_error}). No mailbox action was taken.",
             )
         elif code and state:
             credentials, authorized_email = exchange_authorization_code(
@@ -177,11 +193,19 @@ def handle_cloud_oauth_callback(config, identity):
             )
         else:
             raise OAuthSecurityError("Incomplete OAuth callback.")
-    except (OAuthSecurityError, GoogleAuthError, ValueError, OSError):
+    except Exception as exc:
+        exception_type, safe_error = oauth_failure_diagnostic(exc)
+        LOGGER.error(
+            "gmail_oauth_callback_failed exception_type=%s oauth_error=%s",
+            exception_type,
+            safe_error,
+        )
         clear_user_gmail_state(st.session_state)
         st.session_state.oauth_notice = (
             "error",
-            "Gmail authorization failed security validation. Start the connection again.",
+            "Gmail authorization failed safely "
+            f"({exception_type}; oauth_error={safe_error}). "
+            "Start the connection again.",
         )
     st.rerun()
 
