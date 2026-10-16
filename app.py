@@ -13,6 +13,7 @@ from googleapiclient.errors import HttpError
 
 from classifier import classify_email
 from drag_select_table import drag_select_table
+from gmail_client import fetch_inbox
 from selection import eligible_trash_ids, normalize_selected_ids
 
 ROOT = Path(__file__).resolve().parent
@@ -46,36 +47,6 @@ def get_service():
     return build('gmail', 'v1', credentials=creds, cache_discovery=False)
 
 
-def fetch_inbox(service, limit):
-    ids = []
-    token = None
-    while len(ids) < limit:
-        res = service.users().messages().list(
-            userId='me', q='in:inbox -in:trash -in:spam',
-            maxResults=min(100, limit-len(ids)), pageToken=token
-        ).execute()
-        ids.extend(item['id'] for item in res.get('messages', []))
-        token = res.get('nextPageToken')
-        if not token:
-            break
-    out = []
-    for message_id in ids:
-        msg = service.users().messages().get(
-            userId='me', id=message_id, format='metadata',
-            metadataHeaders=['From', 'Subject', 'Date']
-        ).execute()
-        headers = {h['name'].lower(): h['value'] for h in msg.get('payload', {}).get('headers', [])}
-        out.append({
-            'id': message_id,
-            'from': headers.get('from', ''),
-            'subject': headers.get('subject', '(no subject)'),
-            'date': headers.get('date', ''),
-            'snippet': msg.get('snippet', ''),
-            'labels': msg.get('labelIds', []),
-        })
-    return out
-
-
 def load_whitelist():
     if SETTINGS.exists():
         try:
@@ -97,7 +68,7 @@ if 'scan_revision' not in st.session_state:
 
 with st.sidebar:
     st.header('Settings')
-    limit = st.slider('Inbox messages to scan', 10, 200, 50, step=10)
+    limit = st.slider('Inbox messages to scan', 10, 500, 200, step=10)
     wl = st.text_area('Never trash senders/domains (one per line)', '\n'.join(st.session_state.whitelist), height=130)
     if st.button('Save whitelist'):
         st.session_state.whitelist = [s.strip().lower() for s in wl.splitlines() if s.strip()]
@@ -111,14 +82,43 @@ if not CLIENT.exists():
     st.stop()
 
 if st.button('🔗 Connect Gmail & Scan Inbox', type='primary'):
+    scan_progress = st.progress(0)
+    scan_status = st.empty()
+
+    def report_scan_progress(phase, current, total):
+        if phase == 'listing':
+            percentage = min(20, round(20 * current / max(total, 1)))
+            scan_progress.progress(percentage)
+            scan_status.caption(f'Found {current} inbox message(s), up to the {total}-message limit.')
+        else:
+            percentage = 20 + round(80 * current / max(total, 1)) if total else 100
+            scan_progress.progress(min(percentage, 100))
+            scan_status.caption(f'Retrieving message metadata: {current} of {total}.')
+
+    def report_scan_retry(attempt, maximum, delay):
+        scan_status.caption(
+            f'Gmail is temporarily busy or rate-limited. Retrying in {delay:g}s '
+            f'(attempt {attempt} of {maximum}).'
+        )
+
     try:
         with st.spinner('Connecting and scanning…'):
             service = get_service()
-            st.session_state.messages = fetch_inbox(service, limit)
+            st.session_state.messages = fetch_inbox(
+                service,
+                limit,
+                progress_callback=report_scan_progress,
+                retry_callback=report_scan_retry,
+            )
             st.session_state.selected_message_ids = []
             st.session_state.scan_revision += 1
+        scan_progress.progress(100)
+        scan_status.caption(
+            f'Scan complete: {len(st.session_state.messages)} message(s) retrieved.'
+        )
         st.success(f"Scanned {len(st.session_state.messages)} messages. Nothing has been deleted.")
     except (HttpError, ValueError, OSError, FileNotFoundError) as error:
+        scan_status.caption('Scan stopped safely. No Gmail messages were changed.')
         st.error(f'Unable to scan: {error}')
 
 messages = st.session_state.messages

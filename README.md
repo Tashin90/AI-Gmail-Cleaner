@@ -12,6 +12,7 @@ A privacy-focused, local Gmail inbox review tool built with Python, the Gmail AP
 ## Key features
 
 - Reads a configurable number of recent inbox messages through the official Gmail API.
+- Scans up to 500 messages with paginated retrieval, visible progress, and bounded rate-limit retries.
 - Uses sender, subject, snippet, Gmail labels, and explicit rules to classify messages.
 - Protects starred, important, transactional, security, study, booking, and whitelisted messages.
 - Supports exact sender and whole-domain whitelist entries.
@@ -69,11 +70,13 @@ https://www.googleapis.com/auth/gmail.modify
 AI-Gmail-Cleaner/
 ├── app.py                 # Streamlit UI and Gmail/OAuth integration
 ├── classifier.py          # Conservative rule-based classifier
+├── gmail_client.py        # Paginated read-only Gmail retrieval and retry handling
 ├── selection.py           # ID validation and protected-email safety boundary
 ├── drag_select_table.py   # Streamlit custom-component wrapper
 ├── drag_select_component/ # Local HTML/JavaScript drag-select table
 ├── tests/js/              # JavaScript model and browser interaction tests
 ├── test_classifier.py     # Classifier unit tests
+├── test_gmail_client.py   # Synthetic pagination, progress, and retry tests
 ├── test_selection.py      # Protected-email and stable-ID tests
 ├── requirements.txt       # Runtime dependencies
 ├── README.md              # Project documentation
@@ -188,7 +191,7 @@ Use a non-critical test account when evaluating changes. Never use real Gmail da
 
 - The classifier is rule-based, not trained AI or machine learning.
 - Detection is conservative but not guaranteed to be accurate or complete.
-- Only 10–200 inbox messages can be scanned per run through the current UI.
+- Between 10 and 500 inbox messages can be scanned per run through the current UI.
 - The app is intended for one local user, not multi-user hosting.
 - OAuth testing-mode refresh tokens may expire, requiring reauthentication.
 - Network errors, Gmail API quotas, and Google policy changes may affect operation.
@@ -197,7 +200,7 @@ Use a non-critical test account when evaluating changes. Never use real Gmail da
 ## Future improvements
 
 - Optional user-trained classification based on confirmed labels.
-- Gmail batch requests and more efficient pagination.
+- Gmail batch metadata requests and adaptive API pacing.
 - Encrypted OS keychain storage for OAuth tokens.
 - Dry-run export containing only anonymized aggregate statistics.
 - Expanded tests for Gmail API failures and UI safety controls.
@@ -209,6 +212,7 @@ Run the classifier tests without connecting to Gmail or installing extra test to
 
 ```powershell
 python test_classifier.py
+python test_gmail_client.py
 python test_selection.py
 node tests/js/selection_model.test.cjs
 ```
