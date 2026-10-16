@@ -24,7 +24,7 @@ A privacy-focused Gmail inbox review tool built with Python, Gmail API, Google O
 ## Technology
 
 - Python 3.10+
-- Streamlit 1.42+
+- Streamlit 1.42+ with the official authentication extra (Authlib and HTTPX)
 - Gmail API (`google-api-python-client`)
 - Google OAuth (`google-auth`, `google-auth-oauthlib`)
 - Local HTML/JavaScript Streamlit component for the review table
