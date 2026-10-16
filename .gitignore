@@ -15,10 +15,14 @@ client_secret*.json
 venv/
 env/
 __pycache__/
+*.pyc
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Browser test artifacts
+.edge-test-profile/
 
 # Local application data
 .streamlit/secrets.toml

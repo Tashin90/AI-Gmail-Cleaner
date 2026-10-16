@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Email review table</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --background: #ffffff;
+      --secondary-background: #f6f7f9;
+      --text: #202124;
+      --muted: #5f6368;
+      --border: #d8dce3;
+      --primary: #ff4b4b;
+      --selected: #dcecff;
+      --selected-border: #4b8fd8;
+      --protected: #8a5a00;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--background);
+      color: var(--text);
+      font: 14px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow: hidden;
+    }
+
+    body.dragging,
+    body.dragging * {
+      cursor: default !important;
+      user-select: none !important;
+      -webkit-user-select: none !important;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 4px 1px 9px;
+    }
+
+    .filter {
+      flex: 1 1 280px;
+      min-width: 170px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--background);
+      color: var(--text);
+      padding: 8px 10px;
+      outline: none;
+      user-select: text;
+    }
+
+    .filter:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 1px var(--primary);
+    }
+
+    .selection-count {
+      flex: 0 0 auto;
+      color: var(--muted);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .hint {
+      margin: 0 1px 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .viewport {
+      height: 470px;
+      overflow: auto;
+      overscroll-behavior: contain;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--background);
+      position: relative;
+      scrollbar-gutter: stable;
+    }
+
+    table {
+      width: 100%;
+      min-width: 940px;
+      border-collapse: separate;
+      border-spacing: 0;
+      table-layout: fixed;
+    }
+
+    thead {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      background: var(--secondary-background);
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--border);
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: middle;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    th button {
+      width: 100%;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    th button:hover { color: var(--text); }
+
+    tbody tr {
+      background: var(--background);
+      transition: background-color 70ms linear, box-shadow 70ms linear;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    tbody tr:hover { background: var(--secondary-background); }
+
+    tbody tr.selected {
+      background: var(--selected);
+      box-shadow: inset 3px 0 0 var(--selected-border);
+    }
+
+    tbody tr.selected:hover { background: var(--selected); }
+
+    tbody tr.protected td.category {
+      color: var(--protected);
+      font-weight: 650;
+    }
+
+    .select-cell {
+      width: 64px;
+      text-align: center;
+      overflow: visible;
+    }
+
+    .drag-checkbox {
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      accent-color: var(--primary);
+      cursor: pointer;
+      touch-action: none;
+    }
+
+    .from { width: 22%; }
+    .subject { width: 27%; }
+    .category { width: 12%; }
+    .reason { width: 25%; }
+    .date { width: 14%; }
+
+    .empty {
+      padding: 40px 16px;
+      text-align: center;
+      color: var(--muted);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --background: #0e1117;
+        --secondary-background: #262730;
+        --text: #fafafa;
+        --muted: #b8bcc6;
+        --border: #41444f;
+        --selected: #173b62;
+        --selected-border: #6ea8e5;
+        --protected: #f2bd61;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <input id="filter" class="filter" type="search" placeholder="Filter sender, subject, category, reason, or date" aria-label="Filter email rows">
+    <span id="selection-count" class="selection-count" aria-live="polite">0 selected</span>
+  </div>
+  <p class="hint">Drag vertically across checkboxes • Ctrl+Click toggles one row • Shift+Click selects a visible range • Click a heading to sort</p>
+  <div id="viewport" class="viewport">
+    <table aria-label="Email review table">
+      <thead>
+        <tr>
+          <th class="select-cell">Select</th>
+          <th class="from"><button type="button" data-sort="sender">From</button></th>
+          <th class="subject"><button type="button" data-sort="subject">Subject</button></th>
+          <th class="category"><button type="button" data-sort="category">Category</button></th>
+          <th class="reason"><button type="button" data-sort="reason">Reason</button></th>
+          <th class="date"><button type="button" data-sort="date">Date</button></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <script src="selection_model.js"></script>
+  <script>
+    "use strict";
+
+    const filterInput = document.getElementById("filter");
+    const countElement = document.getElementById("selection-count");
+    const viewport = document.getElementById("viewport");
+    const tbody = document.getElementById("rows");
+    const model = new DragSelectionModel();
+
+    let rows = [];
+    let filterText = "";
+    let sortKey = null;
+    let sortDirection = 1;
+    let anchorId = null;
+    let drag = null;
+    let autoScrollFrame = null;
+    let selectionEpoch = null;
+
+    function postStreamlitMessage(type, details = {}) {
+      window.parent.postMessage({
+        isStreamlitMessage: true,
+        type,
+        ...details,
+      }, "*");
+    }
+
+    function setFrameHeight() {
+      const height = Math.ceil(document.body.getBoundingClientRect().height);
+      postStreamlitMessage("streamlit:setFrameHeight", { height });
+    }
+
+    function emitSelection() {
+      const sourceOrder = rows.map((row) => row.id);
+      postStreamlitMessage("streamlit:setComponentValue", {
+        value: model.toArray(sourceOrder),
+      });
+    }
+
+    function applyTheme(theme) {
+      if (!theme) return;
+      const root = document.documentElement.style;
+      if (theme.backgroundColor) root.setProperty("--background", theme.backgroundColor);
+      if (theme.secondaryBackgroundColor) root.setProperty("--secondary-background", theme.secondaryBackgroundColor);
+      if (theme.textColor) root.setProperty("--text", theme.textColor);
+      if (theme.primaryColor) root.setProperty("--primary", theme.primaryColor);
+    }
+
+    function normalizedRow(raw, index) {
+      return {
+        id: String(raw.id ?? ""),
+        sender: String(raw.sender ?? ""),
+        subject: String(raw.subject ?? ""),
+        category: String(raw.category ?? ""),
+        reason: String(raw.reason ?? ""),
+        date: String(raw.date ?? ""),
+        protected: Boolean(raw.protected),
+        sourceIndex: index,
+      };
+    }
+
+    function getVisibleRows() {
+      const query = filterText.trim().toLocaleLowerCase();
+      let visible = rows.filter((row) => {
+        if (!query) return true;
+        return [row.sender, row.subject, row.category, row.reason, row.date]
+          .some((value) => value.toLocaleLowerCase().includes(query));
+      });
+
+      if (sortKey) {
+        visible = [...visible].sort((left, right) => {
+          const comparison = left[sortKey].localeCompare(
+            right[sortKey], undefined, { numeric: true, sensitivity: "base" }
+          );
+          return comparison === 0
+            ? left.sourceIndex - right.sourceIndex
+            : comparison * sortDirection;
+        });
+      }
+      return visible;
+    }
+
+    function makeCell(className, value, title = value) {
+      const cell = document.createElement("td");
+      cell.className = className;
+      cell.textContent = value;
+      cell.title = title;
+      return cell;
+    }
+
+    function renderTable() {
+      const visibleRows = getVisibleRows();
+      model.setVisibleIds(visibleRows.map((row) => row.id));
+      tbody.replaceChildren();
+
+      if (!visibleRows.length) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.className = "empty";
+        cell.colSpan = 6;
+        cell.textContent = rows.length ? "No emails match this filter." : "No emails to review.";
+        row.appendChild(cell);
+        tbody.appendChild(row);
+        updateSelectionVisuals();
+        return;
+      }
+
+      const fragment = document.createDocumentFragment();
+      for (const email of visibleRows) {
+        const row = document.createElement("tr");
+        row.dataset.messageId = email.id;
+        row.classList.toggle("selected", model.has(email.id));
+        row.classList.toggle("protected", email.protected);
+        row.setAttribute("aria-selected", String(model.has(email.id)));
+
+        const selectCell = document.createElement("td");
+        selectCell.className = "select-cell";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.className = "drag-checkbox";
+        checkbox.dataset.messageId = email.id;
+        checkbox.checked = model.has(email.id);
+        checkbox.readOnly = true;
+        checkbox.setAttribute("aria-label", `Select email from ${email.sender}: ${email.subject}`);
+        selectCell.appendChild(checkbox);
+
+        row.appendChild(selectCell);
+        row.appendChild(makeCell("from", email.sender));
+        row.appendChild(makeCell("subject", email.subject));
+        row.appendChild(makeCell("category", email.category));
+        row.appendChild(makeCell("reason", email.reason));
+        row.appendChild(makeCell("date", email.date));
+        fragment.appendChild(row);
+      }
+      tbody.appendChild(fragment);
+      updateSelectionVisuals();
+    }
+
+    function updateSelectionVisuals() {
+      for (const row of tbody.querySelectorAll("tr[data-message-id]")) {
+        const selected = model.has(row.dataset.messageId);
+        row.classList.toggle("selected", selected);
+        row.setAttribute("aria-selected", String(selected));
+        const checkbox = row.querySelector(".drag-checkbox");
+        if (checkbox) checkbox.checked = selected;
+      }
+      countElement.textContent = `${model.selected.size} selected`;
+    }
+
+    function rowIdAtPoint(clientX, clientY) {
+      const viewportRect = viewport.getBoundingClientRect();
+      if (clientX < viewportRect.left || clientX > viewportRect.right ||
+          clientY < viewportRect.top || clientY > viewportRect.bottom) {
+        return null;
+      }
+
+      const pointed = document.elementFromPoint(clientX, clientY);
+      const directRow = pointed && pointed.closest("tr[data-message-id]");
+      if (directRow) return directRow.dataset.messageId;
+
+      let nearestId = null;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      for (const row of tbody.querySelectorAll("tr[data-message-id]")) {
+        const rect = row.getBoundingClientRect();
+        const center = rect.top + rect.height / 2;
+        const distance = Math.abs(clientY - center);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestId = row.dataset.messageId;
+        }
+      }
+      return nearestId;
+    }
+
+    function paintToPointer(clientX, clientY) {
+      if (!drag) return;
+      const currentId = rowIdAtPoint(clientX, clientY);
+      if (!currentId || currentId === drag.lastId) return;
+      model.paintBetween(drag.lastId, currentId, drag.desired);
+      drag.lastId = currentId;
+      drag.moved = true;
+      updateSelectionVisuals();
+    }
+
+    function autoScrollStep() {
+      autoScrollFrame = null;
+      if (!drag) return;
+
+      const rect = viewport.getBoundingClientRect();
+      const edge = 52;
+      const maxSpeed = 22;
+      let speed = 0;
+      if (drag.clientY < rect.top + edge) {
+        speed = -maxSpeed * Math.min(1, (rect.top + edge - drag.clientY) / edge);
+      } else if (drag.clientY > rect.bottom - edge) {
+        speed = maxSpeed * Math.min(1, (drag.clientY - (rect.bottom - edge)) / edge);
+      }
+
+      if (speed !== 0) {
+        viewport.scrollTop += speed;
+        paintToPointer(drag.clientX, drag.clientY);
+      }
+      autoScrollFrame = window.requestAnimationFrame(autoScrollStep);
+    }
+
+    function startAutoScroll() {
+      if (autoScrollFrame === null) {
+        autoScrollFrame = window.requestAnimationFrame(autoScrollStep);
+      }
+    }
+
+    function stopAutoScroll() {
+      if (autoScrollFrame !== null) {
+        window.cancelAnimationFrame(autoScrollFrame);
+        autoScrollFrame = null;
+      }
+    }
+
+    function finishDrag(event) {
+      if (!drag || (event.pointerId !== undefined && event.pointerId !== drag.pointerId)) return;
+      const checkbox = drag.checkbox;
+      const pointerId = drag.pointerId;
+      drag = null;
+      stopAutoScroll();
+      document.body.classList.remove("dragging");
+      try {
+        if (checkbox.hasPointerCapture(pointerId)) checkbox.releasePointerCapture(pointerId);
+      } catch (_) {}
+      emitSelection();
+    }
+
+    tbody.addEventListener("pointerdown", (event) => {
+      const checkbox = event.target.closest(".drag-checkbox");
+      if (!checkbox || event.button !== 0) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      checkbox.focus({ preventScroll: true });
+
+      const id = checkbox.dataset.messageId;
+      const visibleIds = getVisibleRows().map((row) => row.id);
+      model.setVisibleIds(visibleIds);
+
+      let desired = true;
+      if (event.shiftKey) {
+        model.selectRange(anchorId, id);
+      } else {
+        desired = model.toggle(id);
+        anchorId = id;
+      }
+
+      drag = {
+        pointerId: event.pointerId,
+        checkbox,
+        lastId: id,
+        desired,
+        moved: false,
+        clientX: event.clientX,
+        clientY: event.clientY,
+      };
+      try { checkbox.setPointerCapture(event.pointerId); } catch (_) {}
+      document.body.classList.add("dragging");
+      updateSelectionVisuals();
+      startAutoScroll();
+    });
+
+    window.addEventListener("pointermove", (event) => {
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      event.preventDefault();
+      drag.clientX = event.clientX;
+      drag.clientY = event.clientY;
+      paintToPointer(event.clientX, event.clientY);
+    }, { passive: false });
+
+    window.addEventListener("pointerup", finishDrag);
+    window.addEventListener("pointercancel", finishDrag);
+
+    tbody.addEventListener("click", (event) => {
+      if (event.target.closest(".drag-checkbox")) {
+        event.preventDefault();
+        return;
+      }
+      const row = event.target.closest("tr[data-message-id]");
+      if (!row) return;
+
+      const id = row.dataset.messageId;
+      model.setVisibleIds(getVisibleRows().map((email) => email.id));
+      if (event.shiftKey) {
+        model.selectRange(anchorId, id);
+      } else {
+        model.toggle(id);
+        anchorId = id;
+      }
+      updateSelectionVisuals();
+      emitSelection();
+    });
+
+    tbody.addEventListener("keydown", (event) => {
+      const checkbox = event.target.closest(".drag-checkbox");
+      if (!checkbox || ![" ", "Enter"].includes(event.key)) return;
+      event.preventDefault();
+      const id = checkbox.dataset.messageId;
+      model.toggle(id);
+      anchorId = id;
+      updateSelectionVisuals();
+      emitSelection();
+    });
+
+    tbody.addEventListener("dragstart", (event) => event.preventDefault());
+
+    filterInput.addEventListener("input", () => {
+      filterText = filterInput.value;
+      renderTable();
+    });
+
+    document.querySelector("thead").addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-sort]");
+      if (!button) return;
+      const requestedKey = button.dataset.sort;
+      if (sortKey === requestedKey) {
+        sortDirection *= -1;
+      } else {
+        sortKey = requestedKey;
+        sortDirection = 1;
+      }
+      renderTable();
+    });
+
+    window.addEventListener("message", (event) => {
+      const data = event.data;
+      if (event.source !== window.parent || !data || data.type !== "streamlit:render") return;
+      const args = data.args || {};
+      const incoming = Array.isArray(args.rows) ? args.rows : [];
+      rows = incoming.map(normalizedRow).filter((row) => row.id);
+      const validIds = rows.map((row) => row.id);
+      const selectedIds = Array.isArray(args.selected_ids) ? args.selected_ids.map(String) : [];
+      const incomingEpoch = String(args.selection_epoch ?? "");
+      if (selectionEpoch === null || selectionEpoch !== incomingEpoch) {
+        model.replace(selectedIds);
+        selectionEpoch = incomingEpoch;
+      }
+      model.retain(validIds);
+      applyTheme(data.theme);
+      renderTable();
+      setFrameHeight();
+    });
+
+    postStreamlitMessage("streamlit:componentReady", { apiVersion: 1 });
+    setFrameHeight();
+  </script>
+</body>
+</html>

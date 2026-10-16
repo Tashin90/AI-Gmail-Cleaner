@@ -1,10 +1,9 @@
 """Local Gmail inbox review dashboard. No unattended deletion."""
+import hashlib
 import json
 import os
-import re
 from pathlib import Path
 
-import pandas as pd
 import streamlit as st
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -13,6 +12,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from classifier import classify_email
+from drag_select_table import drag_select_table
+from selection import eligible_trash_ids, normalize_selected_ids
 
 ROOT = Path(__file__).resolve().parent
 TOKEN = ROOT / 'token.json'
@@ -89,6 +90,10 @@ if 'whitelist' not in st.session_state:
     st.session_state.whitelist = load_whitelist()
 if 'messages' not in st.session_state:
     st.session_state.messages = []
+if 'selected_message_ids' not in st.session_state:
+    st.session_state.selected_message_ids = []
+if 'scan_revision' not in st.session_state:
+    st.session_state.scan_revision = 0
 
 with st.sidebar:
     st.header('Settings')
@@ -110,6 +115,8 @@ if st.button('🔗 Connect Gmail & Scan Inbox', type='primary'):
         with st.spinner('Connecting and scanning…'):
             service = get_service()
             st.session_state.messages = fetch_inbox(service, limit)
+            st.session_state.selected_message_ids = []
+            st.session_state.scan_revision += 1
         st.success(f"Scanned {len(st.session_state.messages)} messages. Nothing has been deleted.")
     except (HttpError, ValueError, OSError, FileNotFoundError) as error:
         st.error(f'Unable to scan: {error}')
@@ -120,35 +127,55 @@ if messages:
     for mail in messages:
         result = classify_email(mail, st.session_state.whitelist)
         classified.append({**mail, **result})
-    counts = pd.Series([m['category'] for m in classified]).value_counts()
     c1, c2, c3, c4 = st.columns(4)
     c1.metric('Scanned', len(classified))
     c2.metric('Suggested for review', sum(m['suggested'] for m in classified))
     c3.metric('Protected', sum(m['category'] == 'Protected' for m in classified))
     c4.metric('Other / uncertain', sum(m['category'] == 'Uncertain' for m in classified))
     st.subheader('Review suggestions')
-    st.write('Only individually selected messages can be moved to Trash. Your selections reset after each scan.')
-    df = pd.DataFrame([{
-        'Trash?': False,
-        'From': m['from'],
-        'Subject': m['subject'],
-        'Category': m['category'],
-        'Reason': m['reason'],
-        'Date': m['date'],
-        'Message ID': m['id'],
-    } for m in classified])
-    df = df.sort_values(by='Category', key=lambda col: col.map({'Promotion':0, 'Uncertain':1, 'Protected':2})).reset_index(drop=True)
-    edited = st.data_editor(df, hide_index=True, use_container_width=True, key='review_editor',
-        disabled=['From', 'Subject', 'Category', 'Reason', 'Date', 'Message ID'],
-        column_config={'Trash?': st.column_config.CheckboxColumn('Trash?', help='Check only messages you have reviewed'),
-                       'Message ID': None})
-    selected_ids = edited.loc[edited['Trash?'] == True, 'Message ID'].tolist()
+    st.write(
+        'Drag vertically across checkboxes to select a range. Ctrl+Click toggles '
+        'one email; Shift+Click selects a continuous visible range. Selections '
+        'reset after each new scan.'
+    )
+    category_order = {'Promotion': 0, 'Uncertain': 1, 'Protected': 2}
+    classified.sort(key=lambda message: category_order.get(message['category'], 3))
+    valid_ids = [message['id'] for message in classified]
+    previous_ids = normalize_selected_ids(
+        st.session_state.selected_message_ids,
+        valid_ids,
+    )
+    component_ids = drag_select_table(
+        rows=[{
+            'id': message['id'],
+            'sender': message['from'],
+            'subject': message['subject'],
+            'category': message['category'],
+            'reason': message['reason'],
+            'date': message['date'],
+            'protected': message['category'] == 'Protected',
+        } for message in classified],
+        selected_ids=previous_ids,
+        selection_epoch=st.session_state.scan_revision,
+        key=f"review_drag_table_{st.session_state.scan_revision}",
+    )
+    selected_ids = normalize_selected_ids(
+        component_ids if component_ids is not None else previous_ids,
+        valid_ids,
+    )
+    st.session_state.selected_message_ids = selected_ids
     st.info(f'{len(selected_ids)} messages selected. Protected messages cannot be trashed by this app.')
-    by_id = {m['id']: m for m in classified}
-    safe_ids = [i for i in selected_ids if by_id[i]['category'] != 'Protected']
+    safe_ids = eligible_trash_ids(selected_ids, classified)
     if len(safe_ids) != len(selected_ids):
         st.warning('Protected messages are excluded even if selected.')
-    confirm = st.checkbox('I reviewed the selected emails and authorize moving them to Gmail Trash.', value=False)
+    selection_fingerprint = hashlib.sha256(
+        '\0'.join(sorted(safe_ids)).encode('utf-8')
+    ).hexdigest()[:12]
+    confirm = st.checkbox(
+        'I reviewed the selected emails and authorize moving them to Gmail Trash.',
+        value=False,
+        key=f'confirm_trash_{st.session_state.scan_revision}_{selection_fingerprint}',
+    )
     if st.button(f'🗑️ Move {len(safe_ids)} selected message(s) to Trash', disabled=not(confirm and safe_ids)):
         try:
             service = get_service()
@@ -161,6 +188,10 @@ if messages:
                 except HttpError as exc:
                     errors.append(f'{message_id}: {exc}')
             st.session_state.messages = [m for m in messages if m['id'] not in succeeded]
+            st.session_state.selected_message_ids = [
+                message_id for message_id in selected_ids
+                if message_id not in succeeded
+            ]
             st.success(f'Moved {len(succeeded)} messages to Trash. You can restore them from Gmail Trash.')
             if errors:
                 st.error('Some messages failed: ' + '; '.join(errors[:5]))

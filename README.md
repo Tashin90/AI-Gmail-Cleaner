@@ -15,6 +15,8 @@ A privacy-focused, local Gmail inbox review tool built with Python, the Gmail AP
 - Uses sender, subject, snippet, Gmail labels, and explicit rules to classify messages.
 - Protects starred, important, transactional, security, study, booking, and whitelisted messages.
 - Supports exact sender and whole-domain whitelist entries.
+- Supports Explorer-style checkbox dragging, Ctrl+Click toggling, Shift+Click ranges, and edge auto-scroll.
+- Keeps selections attached to stable Gmail Message IDs across Streamlit reruns, sorting, and filtering.
 - Leaves uncertain messages in the inbox by default.
 - Requires individual selection and explicit confirmation before moving mail to Trash.
 - Never permanently deletes messages and performs no unattended or scheduled cleaning.
@@ -26,7 +28,7 @@ A privacy-focused, local Gmail inbox review tool built with Python, the Gmail AP
 - Streamlit
 - Gmail API (`google-api-python-client`)
 - Google OAuth 2.0 (`google-auth` and `google-auth-oauthlib`)
-- pandas
+- A dependency-free HTML/JavaScript Streamlit component for the review table
 
 ## How it works
 
@@ -67,7 +69,12 @@ https://www.googleapis.com/auth/gmail.modify
 AI-Gmail-Cleaner/
 ├── app.py                 # Streamlit UI and Gmail/OAuth integration
 ├── classifier.py          # Conservative rule-based classifier
+├── selection.py           # ID validation and protected-email safety boundary
+├── drag_select_table.py   # Streamlit custom-component wrapper
+├── drag_select_component/ # Local HTML/JavaScript drag-select table
+├── tests/js/              # JavaScript model and browser interaction tests
 ├── test_classifier.py     # Classifier unit tests
+├── test_selection.py      # Protected-email and stable-ID tests
 ├── requirements.txt       # Runtime dependencies
 ├── README.md              # Project documentation
 ├── LICENSE                # MIT license
@@ -145,6 +152,16 @@ Classification is deterministic and explainable:
 
 Protection rules take priority over promotion rules. The classifier still makes mistakes: wording, spoofed senders, missing labels, localization, and unusual messages can all affect results.
 
+## Mouse selection controls
+
+- **Drag-select:** Press the left mouse button on a row checkbox, keep it held, and drag upward or downward. Every crossed visible row receives the starting checkbox's new state.
+- **Auto-scroll:** Keep dragging near the top or bottom edge of the table to continue through rows outside the viewport.
+- **Ctrl+Click:** Toggle one checkbox without changing the other selected IDs.
+- **Shift+Click:** Select the continuous visible range from the last selection anchor to the clicked row.
+- **Filter and sort:** Use the filter field or click a column heading. Selections remain bound to Gmail Message IDs rather than row positions.
+
+The browser sends the selected IDs back to Streamlit only after a completed click or drag. Selection alone never calls Gmail and never moves a message to Trash.
+
 ## Review-before-trash safety
 
 - Scanning is read-only and does not change Gmail data.
@@ -192,7 +209,11 @@ Run the classifier tests without connecting to Gmail or installing extra test to
 
 ```powershell
 python test_classifier.py
+python test_selection.py
+node tests/js/selection_model.test.cjs
 ```
+
+The Node.js test is only for development of the browser selection model; Node.js is not required to run the Streamlit application.
 
 The same tests are also compatible with pytest if you install it separately:
 
