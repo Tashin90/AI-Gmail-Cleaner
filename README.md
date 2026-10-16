@@ -1,102 +1,132 @@
 # AI Gmail Cleaner
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.35%2B-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.42%2B-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A privacy-focused, local Gmail inbox review tool built with Python, the Gmail API, Google OAuth 2.0, and Streamlit. It identifies likely promotional messages, protects important-looking messages, supports sender and domain whitelisting, and requires a human review before anything is moved to Gmail Trash.
+A privacy-focused Gmail inbox review tool built with Python, Gmail API, Google OAuth 2.0, and Streamlit. It detects likely promotions, protects important-looking or whitelisted mail, and keeps a person in control of every Trash action.
 
 > [!IMPORTANT]
-> The current classifier is a transparent, rule-based heuristic system—not a trained machine-learning model. It cannot guarantee perfect detection of important or promotional messages. Always review every selection before confirming a trash action.
+> The classifier is a transparent, rule-based heuristic—not a trained machine-learning model. It cannot guarantee perfect detection. Review every selection before confirming a Trash action.
 
-## Key features
+## Features
 
-- Reads a configurable number of recent inbox messages through the official Gmail API.
-- Scans up to 500 messages with paginated retrieval, visible progress, and bounded rate-limit retries.
-- Uses sender, subject, snippet, Gmail labels, and explicit rules to classify messages.
-- Protects starred, important, transactional, security, study, booking, and whitelisted messages.
-- Supports exact sender and whole-domain whitelist entries.
-- Supports Explorer-style checkbox dragging, Ctrl+Click toggling, Shift+Click ranges, and edge auto-scroll.
-- Keeps selections attached to stable Gmail Message IDs across Streamlit reruns, sorting, and filtering.
-- Leaves uncertain messages in the inbox by default.
-- Requires individual selection and explicit confirmation before moving mail to Trash.
-- Never permanently deletes messages and performs no unattended or scheduled cleaning.
-- Processes message metadata and snippets locally; it sends nothing to an external AI service.
+- Scans 10–500 inbox messages with pagination, accurate progress, and bounded retry for transient Gmail API errors.
+- Classifies mail as `Promotion`, `Protected`, or `Uncertain` using conservative rules.
+- Protects starred, important, transactional, security, study, booking, delivery, and whitelisted mail.
+- Supports sender and whole-domain whitelisting.
+- Provides drag-to-select checkboxes, edge auto-scroll, Ctrl+Click, Shift+Click, sorting, and filtering.
+- Keeps selection attached to stable Gmail Message IDs across Streamlit reruns.
+- Requires review plus a separate confirmation checkbox before moving eligible mail to Trash.
+- Never calls Gmail's permanent-delete endpoint and never performs an automatic Trash action.
+- Supports both local Desktop OAuth and a separate HTTPS Web OAuth flow for Streamlit Cloud.
 
-## Technology stack
+## Technology
 
 - Python 3.10+
-- Streamlit
+- Streamlit 1.42+
 - Gmail API (`google-api-python-client`)
-- Google OAuth 2.0 (`google-auth` and `google-auth-oauthlib`)
-- A dependency-free HTML/JavaScript Streamlit component for the review table
+- Google OAuth (`google-auth`, `google-auth-oauthlib`)
+- Local HTML/JavaScript Streamlit component for the review table
 
 ## How it works
 
-1. The user connects a Gmail account through Google's OAuth consent flow.
-2. The app requests up to the chosen number of inbox messages, excluding Spam and Trash.
-3. It fetches only metadata needed for review: sender, subject, date, snippet, labels, and Gmail message ID.
-4. The rule-based classifier checks whitelist entries and important-message safeguards first.
-5. Strong promotional signals are marked `Promotion`; insufficient evidence becomes `Uncertain`.
-6. The user reviews the table and selects specific non-protected messages.
-7. Only after the confirmation checkbox is selected can the app move those messages to Gmail Trash.
+1. The user authenticates and separately authorizes Gmail access.
+2. The app lists inbox message IDs, following Gmail pagination up to the selected limit.
+3. It retrieves sender, subject, date, snippet, labels, and stable message ID.
+4. Protection rules and the whitelist run before promotional rules.
+5. The user reviews and selects messages in the drag-select table.
+6. Protected IDs are removed again at the server-side safety boundary.
+7. Gmail's reversible `trash` operation runs only after explicit confirmation.
 
-Messages placed in Trash can normally be restored in Gmail until Gmail permanently deletes them under its own retention policy. This application does not call Gmail's permanent-delete endpoint.
+Messages normally remain recoverable from Gmail Trash until Gmail applies its own retention policy. This project has no permanent-delete call.
 
-## OAuth authentication flow
+## Two separate cloud authorization flows
 
-The app uses the OAuth 2.0 installed desktop application flow:
+Streamlit authentication and Gmail authorization are deliberately separate:
 
-1. On first connection, `credentials.json` starts a browser-based Google consent flow.
-2. Google redirects to a temporary localhost callback opened by the application.
-3. The resulting authorization credentials are stored locally in `token.json`.
-4. Later sessions refresh the token when possible; otherwise, the consent flow runs again.
+1. **Streamlit OIDC authentication** uses `st.login()` to establish who may use the deployment. It does not grant Gmail API access.
+2. **Gmail Web OAuth authorization** asks that verified user for `gmail.modify`, exchanges the code at Google's token endpoint, and creates the Gmail service.
 
-Both JSON files are local secrets and are excluded by `.gitignore`. Never commit, upload, paste, or share them. The token is written with restrictive file permissions where the operating system supports them.
+The Gmail flow uses a signed, user-bound state value with a 10-minute lifetime, OAuth nonce validation, PKCE S256, an HTTPS authorization-code exchange, and Google ID-token verification. The Gmail account email must match the verified Streamlit identity email. Missing claims, a non-allowlisted user, tampered/expired state, account mismatch, revoked credentials, or incomplete configuration fails closed.
 
-## Gmail API permission
+Cloud tokens, whitelist entries, Gmail metadata, and selections live only in the authenticated user's Streamlit session. There is no shared token file, process-global mailbox cache, or cloud filesystem persistence. A browser refresh, disconnected session, or app restart can require Gmail authorization again; this is an intentional security tradeoff for the current deployment.
 
-The app requests this scope:
+## Exact Google Cloud Web client configuration
 
-```text
-https://www.googleapis.com/auth/gmail.modify
+Enable **Gmail API**, configure the OAuth consent screen, add the required test accounts under **Audience → Test users**, and add `https://www.googleapis.com/auth/gmail.modify` under **Data Access**.
+
+Create two distinct OAuth 2.0 client IDs of type **Web application**:
+
+### 1. Streamlit identity client
+
+This client is used only by `st.login()`.
+
+- Authorized JavaScript origin: `https://ai-gmail-cleaner.streamlit.app`
+- Authorized redirect URI: `https://ai-gmail-cleaner.streamlit.app/oauth2callback`
+
+### 2. Gmail authorization client
+
+This client is used only by the app's Gmail authorization-code flow.
+
+- Authorized JavaScript origin: `https://ai-gmail-cleaner.streamlit.app`
+- **Authorized redirect URI: `https://ai-gmail-cleaner.streamlit.app/`**
+
+The trailing slash is part of the Gmail redirect URI. Google requires an exact match. Do not use localhost, `/oauth2callback`, a wildcard, or the GitHub repository URL for this second client.
+
+Keep the consent screen in **Testing** and list every permitted account as a Google test user unless/until the application completes Google's applicable verification requirements. `gmail.modify` is a sensitive/restricted scope and broader public distribution may require verification and a security assessment.
+
+## Streamlit Secrets
+
+In Streamlit Community Cloud, open the app's **Settings → Secrets** and add the following TOML with your own values. Never commit this configuration.
+
+```toml
+[app]
+deployment_mode = "cloud"
+allowed_users = ["approved-test-user@example.com"]
+
+# Streamlit OIDC identity client (Web application client #1)
+[auth]
+redirect_uri = "https://ai-gmail-cleaner.streamlit.app/oauth2callback"
+cookie_secret = "GENERATE_A_LONG_RANDOM_VALUE"
+client_id = "IDENTITY_WEB_CLIENT_ID.apps.googleusercontent.com"
+client_secret = "IDENTITY_WEB_CLIENT_SECRET"
+server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
+
+# Gmail API authorization client (Web application client #2)
+[google_oauth]
+client_id = "GMAIL_WEB_CLIENT_ID.apps.googleusercontent.com"
+client_secret = "GMAIL_WEB_CLIENT_SECRET"
+redirect_uri = "https://ai-gmail-cleaner.streamlit.app/"
+state_secret = "GENERATE_A_DIFFERENT_RANDOM_VALUE_OF_AT_LEAST_32_BYTES"
 ```
 
-`gmail.modify` allows the app to read messages and labels and to move selected messages to Trash. This is a sensitive/restricted Gmail scope; distributing a hosted application may require Google verification and, in some cases, a security assessment.
+Generate `cookie_secret` and `state_secret` independently with a cryptographically secure password generator. Do not reuse client secrets as state or cookie secrets. After saving Secrets, reboot the Streamlit app. Add the same email addresses to both `allowed_users` and Google OAuth test users.
 
-## Project structure
+## Streamlit Cloud deployment
 
-```text
-AI-Gmail-Cleaner/
-├── app.py                 # Streamlit UI and Gmail/OAuth integration
-├── classifier.py          # Conservative rule-based classifier
-├── gmail_client.py        # Paginated read-only Gmail retrieval and retry handling
-├── selection.py           # ID validation and protected-email safety boundary
-├── drag_select_table.py   # Streamlit custom-component wrapper
-├── drag_select_component/ # Local HTML/JavaScript drag-select table
-├── tests/js/              # JavaScript model and browser interaction tests
-├── test_classifier.py     # Classifier unit tests
-├── test_gmail_client.py   # Synthetic pagination, progress, and retry tests
-├── test_selection.py      # Protected-email and stable-ID tests
-├── requirements.txt       # Runtime dependencies
-├── README.md              # Project documentation
-├── LICENSE                # MIT license
-├── .gitignore             # Secret, local-data, and tooling exclusions
-├── credentials.json       # Local OAuth client secret (ignored; user supplied)
-├── token.json             # Local OAuth token (ignored; generated)
-└── settings.json          # Local whitelist preferences (ignored; generated)
-```
+1. Fork or deploy `Tashin90/AI-Gmail-Cleaner`, branch `main`, entrypoint `app.py`.
+2. Configure both Google Web clients with the exact URIs above.
+3. Add the placeholder-shaped configuration above to Streamlit Secrets using real secret values.
+4. Reboot the app.
+5. Select **Sign in with Google**. This establishes identity only.
+6. Select **Authorize Gmail access** and choose the same Google account.
+7. Scan and review mail. Authorization never triggers a scan or Trash operation by itself.
 
-## Installation
+The deployed URL is [https://ai-gmail-cleaner.streamlit.app](https://ai-gmail-cleaner.streamlit.app).
 
-### Prerequisites
+## Local Desktop OAuth
 
-- Python 3.10 or newer
-- A Google account with Gmail
-- A Google Cloud project
-- Git (only needed to clone the repository)
+Local development keeps the existing installed-application flow and does not require Streamlit Secrets.
 
-### Set up the application
+1. In Google Cloud, create an OAuth client ID of type **Desktop app**.
+2. Download it, rename it `credentials.json`, and place it beside `app.py`.
+3. Do not set `[app].deployment_mode = "cloud"` locally.
+4. Start Streamlit and choose **Connect Gmail & Scan Inbox**.
+
+Google redirects the Desktop flow to a temporary loopback URL created by `run_local_server(port=0)`. The resulting `token.json` remains local and is refreshed when possible. Both files are ignored by Git.
+
+## Installation and local run
 
 ```powershell
 git clone https://github.com/Tashin90/AI-Gmail-Cleaner.git
@@ -105,157 +135,119 @@ py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-```
-
-On macOS or Linux, activate the environment with:
-
-```bash
-source .venv/bin/activate
-```
-
-## Google Cloud configuration
-
-1. Open the [Google Cloud Console](https://console.cloud.google.com/) and create or select a project.
-2. Go to **APIs & Services → Library**, find **Gmail API**, and enable it.
-3. Open **Google Auth Platform** and configure the app name, support email, and developer contact information.
-4. Configure the audience. For a personal account, choose **External**. While the app is in testing, add your own Google account as a test user.
-5. Add the `https://www.googleapis.com/auth/gmail.modify` scope if the console requests explicit scope configuration.
-6. Go to **Clients** (or **Credentials**), choose **Create OAuth client ID**, and select **Desktop app**.
-7. Download the client configuration JSON.
-
-### Create `credentials.json`
-
-Rename the downloaded OAuth client file to `credentials.json` and place it beside `app.py`:
-
-```text
-AI-Gmail-Cleaner/credentials.json
-```
-
-Do not copy credential values into Python source, environment examples, issues, screenshots, or commits. The repository's `.gitignore` excludes this file and common alternative client-secret filenames.
-
-## Run with Streamlit
-
-From the project directory, with the virtual environment active:
-
-```powershell
 python -m streamlit run app.py
 ```
 
-Open the local URL shown by Streamlit, normally `http://localhost:8501`. On first use, click **Connect Gmail & Scan Inbox**, complete Google's consent screen, and return to the app.
+On macOS or Linux, activate with `source .venv/bin/activate`. Streamlit normally opens `http://localhost:8501`.
 
-Do not expose this local dashboard directly to the public internet. The current OAuth and token-storage design is intended for a single trusted user on a local computer.
+## Gmail permission
 
-## Email classification workflow
+The app requests:
 
-Classification is deterministic and explainable:
+```text
+https://www.googleapis.com/auth/gmail.modify
+```
 
-- **Protected:** Whitelisted senders/domains, Gmail-starred or important messages, and messages containing strong account, transaction, study, job, booking, security, or delivery cues.
-- **Promotion:** Messages with both convincing promotional context and either Gmail's Promotions label or a known promotional sender pattern.
-- **Uncertain:** Messages without enough evidence. These are not suggested for removal.
+The cloud Gmail flow also requests `openid` and email identity claims solely to prove that the authorizing Gmail account matches the verified Streamlit user. `gmail.modify` can read mailbox data and move selected messages to Trash, so protect all resulting credentials like passwords.
 
-Protection rules take priority over promotion rules. The classifier still makes mistakes: wording, spoofed senders, missing labels, localization, and unusual messages can all affect results.
+## Project structure
 
-## Mouse selection controls
+```text
+AI-Gmail-Cleaner/
+├── app.py                    # Streamlit UI, local/cloud mode selection, safety gates
+├── cloud_oauth.py            # Signed state, PKCE, token exchange, user isolation
+├── classifier.py             # Conservative rule-based classifier
+├── gmail_client.py           # Paginated retrieval and bounded API retries
+├── selection.py              # Stable-ID and protected-message safety boundary
+├── drag_select_table.py      # Custom-component wrapper
+├── drag_select_component/    # HTML/JavaScript drag-select review table
+├── test_cloud_oauth.py       # Mocked OAuth and isolation security tests
+├── test_gmail_client.py      # Synthetic Gmail pagination/retry tests
+├── test_classifier.py        # Classifier tests
+├── test_selection.py         # Protected-ID tests
+├── tests/js/                 # Browser interaction and selection model tests
+├── requirements.txt
+├── .gitignore
+├── LICENSE
+└── README.md
+```
 
-- **Drag-select:** Press the left mouse button on a row checkbox, keep it held, and drag upward or downward. Every crossed visible row receives the starting checkbox's new state.
-- **Auto-scroll:** Keep dragging near the top or bottom edge of the table to continue through rows outside the viewport.
-- **Ctrl+Click:** Toggle one checkbox without changing the other selected IDs.
-- **Shift+Click:** Select the continuous visible range from the last selection anchor to the clicked row.
-- **Filter and sort:** Use the filter field or click a column heading. Selections remain bound to Gmail Message IDs rather than row positions.
+## Selection and review safety
 
-The browser sends the selected IDs back to Streamlit only after a completed click or drag. Selection alone never calls Gmail and never moves a message to Trash.
-
-## Review-before-trash safety
-
-- Scanning is read-only and does not change Gmail data.
-- Every row starts unselected after a scan.
-- The user must select messages one by one.
-- Protected messages are excluded even if selected in the table.
-- A separate confirmation checkbox must be enabled before the Trash button works.
-- The app calls Gmail's Trash operation only for the reviewed, eligible message IDs.
-- No permanent-delete API call exists in the project.
-
-Use a non-critical test account when evaluating changes. Never use real Gmail data for destructive automated testing.
+- Drag upward or downward across checkboxes to apply the starting checkbox state.
+- Hold near the table edge to auto-scroll.
+- Ctrl+Click toggles one row; Shift+Click selects a visible range.
+- Sort or filter freely: selection is keyed by Gmail Message ID, not row position.
+- Selection never calls Gmail.
+- Protected messages remain ineligible even if their UI checkbox is selected.
+- The confirmation checkbox must be checked before the Trash button is enabled.
+- Automated tests use synthetic IDs and mocked APIs; they never connect to Gmail.
 
 ## Security and privacy
 
-- Keep `credentials.json`, `token.json`, `.env` files, `settings.json`, logs, databases, and Streamlit secrets out of Git.
-- Treat `token.json` like a password because it can authorize mailbox access within the granted scope.
-- Restrict local file access and revoke the app from your [Google Account connections](https://myaccount.google.com/connections) if a token might be exposed.
-- Rotate the OAuth client secret in Google Cloud if `credentials.json` might be exposed.
-- Review `git status` and staged diffs before every push.
-- Do not publish email exports, message bodies, metadata, logs, screenshots, or personal whitelist data.
-- No message data is intentionally persisted by this app; scanned messages remain in Streamlit session state for the active session.
+- Never commit `credentials.json`, `token.json`, `.env`, `.streamlit/secrets.toml`, client-secret downloads, private keys, mail exports, logs, or local settings.
+- Never put OAuth secrets in Python, README examples, issues, screenshots, or build logs.
+- Cloud callback errors are intentionally generic and never echo authorization codes or token values.
+- Scanned content is shown only in the authenticated review session and is not intentionally persisted.
+- Local mode writes only the local OAuth token and whitelist settings; cloud mode writes neither.
+- Revoke the app in Google Account connections and rotate the client secret if a credential may have leaked.
+- Use a non-critical test mailbox while evaluating the app.
 
-## Current limitations
+## Tests
 
-- The classifier is rule-based, not trained AI or machine learning.
-- Detection is conservative but not guaranteed to be accurate or complete.
-- Between 10 and 500 inbox messages can be scanned per run through the current UI.
-- The app is intended for one local user, not multi-user hosting.
-- OAuth testing-mode refresh tokens may expire, requiring reauthentication.
-- Network errors, Gmail API quotas, and Google policy changes may affect operation.
-- Whitelist preferences are stored in a local plain-text JSON file.
-
-## Future improvements
-
-- Optional user-trained classification based on confirmed labels.
-- Gmail batch metadata requests and adaptive API pacing.
-- Encrypted OS keychain storage for OAuth tokens.
-- Dry-run export containing only anonymized aggregate statistics.
-- Expanded tests for Gmail API failures and UI safety controls.
-- Internationalized rules and user-editable classification policies.
-
-## Testing
-
-Run the classifier tests without connecting to Gmail or installing extra test tools:
+All Python tests use synthetic data or mocked OAuth/Gmail behavior:
 
 ```powershell
+python -m compileall -q .
 python test_classifier.py
 python test_gmail_client.py
 python test_selection.py
+python test_cloud_oauth.py
 node tests/js/selection_model.test.cjs
+node tests/js/component_browser_test.cjs
 ```
 
-The Node.js test is only for development of the browser selection model; Node.js is not required to run the Streamlit application.
-
-The same tests are also compatible with pytest if you install it separately:
+They are also pytest-compatible:
 
 ```powershell
-python -m pip install pytest
 python -m pytest -q
 ```
 
+## Current limitations
+
+- Classification is rule-based and cannot guarantee correct detection.
+- Cloud credentials are session-only; reconnect after session loss, refresh, restart, or token revocation.
+- Streamlit session state is isolation, not durable encrypted token storage. A multi-instance production service needing persistent grants should use a dedicated backend and encrypted per-user token database.
+- Whitelist changes are session-only in cloud mode; local mode uses ignored `settings.json`.
+- Google testing-mode refresh tokens can expire, and Gmail quota/policy changes can interrupt scans.
+- A hosted app using `gmail.modify` may require Google OAuth verification and an independent security assessment before wider use.
+- Metadata requests are currently sequential and may be slow near 500 messages.
+
 ## Troubleshooting
-
-### `credentials.json missing`
-
-Download a Desktop app OAuth client from Google Cloud, rename it to `credentials.json`, and put it beside `app.py`.
-
-### `Access blocked` or the app is not verified
-
-Confirm that your Google account is listed as a test user and that the Gmail API and requested scope are configured. Wider public distribution can require Google's verification process.
 
 ### `redirect_uri_mismatch`
 
-Create a **Desktop app** OAuth client. A Web application client uses a different redirect configuration and is not suitable for this local flow.
+Confirm which client failed. Streamlit identity must use exactly `https://ai-gmail-cleaner.streamlit.app/oauth2callback`; Gmail authorization must use exactly `https://ai-gmail-cleaner.streamlit.app/`, including its trailing slash. The client IDs in Secrets must match those Web clients.
 
-### Token or scope errors
+### Access denied
 
-Revoke the app from your Google Account, remove your local `token.json` manually, and reconnect. Never share the old or new token. This is the only troubleshooting step that removes a local credential, so back it up first if needed.
+The signed-in email must have a verified claim, appear exactly in `[app].allowed_users`, and be listed as a Google OAuth test user while the consent screen is in Testing.
 
-### PowerShell blocks virtual-environment activation
+### Gmail authorization fails after sign-in
 
-Run the environment's executables directly:
+Streamlit sign-in does not grant Gmail access. Select **Authorize Gmail access**, choose the same Google account, and complete consent within 10 minutes. An account mismatch fails closed.
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m streamlit run app.py
-```
+### Authorization expired or revoked
 
-### Gmail scanning or trash actions fail
+Authorize Gmail again. In local mode, if manual recovery is necessary, revoke the old grant first and remove `token.json` yourself; never share it.
 
-Check your internet connection, confirm the Gmail API is enabled, and inspect the error displayed by the app. API quota, expired authorization, and organization policies can also block access.
+### `credentials.json missing` locally
+
+Download a **Desktop app** OAuth client, rename it `credentials.json`, and place it beside `app.py`. Web client configuration is for cloud mode, not the local loopback flow.
+
+### Gmail scan or Trash action fails
+
+Check network access, Gmail API enablement, consent-screen status, account allowlisting, API quota, and grant validity. The app stops safely and never falls back to permanent deletion.
 
 ## License
 

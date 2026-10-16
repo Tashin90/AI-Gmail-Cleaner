@@ -27,6 +27,11 @@ __pycache__/
 # Local application data
 .streamlit/secrets.toml
 settings.json
+*.pem
+*.key
+*.p12
+*.eml
+*.mbox
 *.db
 *.sqlite
 *.sqlite3
