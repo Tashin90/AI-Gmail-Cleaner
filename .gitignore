@@ -1,0 +1,35 @@
+# Google OAuth secrets
+credentials.json
+token.json
+client_secret*.json
+*credentials*.json
+*token*.json
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local application data
+.streamlit/secrets.toml
+settings.json
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
