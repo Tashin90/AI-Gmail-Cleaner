@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">AI Gmail Cleaner banner</title>
+  <desc id="desc">Banner for AI Gmail Cleaner showing an inbox cleanup concept.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#1e293b" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#22c55e" />
+      <stop offset="100%" stop-color="#14b8a6" />
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="360" rx="24" fill="url(#bg)" />
+  <rect x="70" y="60" width="430" height="240" rx="18" fill="#111827" stroke="#334155" />
+  <rect x="95" y="92" width="380" height="28" rx="8" fill="#1f2937" />
+  <rect x="95" y="132" width="280" height="18" rx="6" fill="#374151" />
+  <rect x="95" y="160" width="330" height="18" rx="6" fill="#374151" />
+  <rect x="95" y="188" width="260" height="18" rx="6" fill="#374151" />
+  <rect x="95" y="230" width="190" height="36" rx="10" fill="url(#accent)" />
+  <text x="190" y="254" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#052e16">Scan &amp; Review</text>
+  <circle cx="860" cy="182" r="94" fill="#14532d" opacity="0.3" />
+  <path d="M822 184l28 28 54-60" fill="none" stroke="#22c55e" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" />
+  <text x="560" y="148" font-family="Arial, sans-serif" font-size="54" font-weight="700" fill="#f8fafc">AI Gmail Cleaner</text>
+  <text x="560" y="198" font-family="Arial, sans-serif" font-size="28" fill="#cbd5e1">Clean inbox clutter with safe, review-first actions</text>
+  <text x="560" y="242" font-family="Arial, sans-serif" font-size="22" fill="#94a3b8">Privacy-focused • Gmail API • Streamlit</text>
+</svg>

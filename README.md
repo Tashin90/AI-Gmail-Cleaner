@@ -6,6 +6,8 @@
 [![Live Demo](https://img.shields.io/badge/Live%20Demo-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://ai-gmail-cleaner.streamlit.app)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+![AI Gmail Cleaner banner](assets/ai-gmail-cleaner-banner.svg)
+
 A privacy-focused Gmail inbox cleanup assistant built with Python, Gmail API, Google OAuth 2.0, and Streamlit.
 
 It helps you quickly review inbox clutter while keeping you in full control of every Trash action.
