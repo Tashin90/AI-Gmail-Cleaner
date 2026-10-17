@@ -2,9 +2,30 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.42%2B-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![GitHub stars](https://img.shields.io/github/stars/Tashin90/AI-Gmail-Cleaner?style=social)](https://github.com/Tashin90/AI-Gmail-Cleaner/stargazers)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://ai-gmail-cleaner.streamlit.app)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A privacy-focused Gmail inbox review tool built with Python, Gmail API, Google OAuth 2.0, and Streamlit. It detects likely promotions, protects important-looking or whitelisted mail, and keeps a person in control of every Trash action.
+A privacy-focused Gmail inbox cleanup assistant built with Python, Gmail API, Google OAuth 2.0, and Streamlit.
+
+It helps you quickly review inbox clutter while keeping you in full control of every Trash action.
+
+## Why people use this project
+
+- **Safer than one-click cleaners:** no automatic delete, no permanent delete endpoint.
+- **Built for control:** review-first workflow with protection rules and confirmation gates.
+- **Practical for real inboxes:** handles 10–500 emails with progress and retry support.
+- **Cloud-ready and local-ready:** secure Streamlit Cloud OAuth flow and local desktop OAuth.
+
+## Quick start (2 minutes)
+
+1. Open the app: [ai-gmail-cleaner.streamlit.app](https://ai-gmail-cleaner.streamlit.app)
+2. Sign in with Google.
+3. Authorize Gmail access for the same account.
+4. Scan your inbox and review suggested promotional messages.
+5. Select what to move to Trash and confirm explicitly.
+
+Prefer running locally? Jump to [Installation and local run](#installation-and-local-run).
 
 > [!IMPORTANT]
 > The classifier is a transparent, rule-based heuristic—not a trained machine-learning model. It cannot guarantee perfect detection. Review every selection before confirming a Trash action.
@@ -248,6 +269,25 @@ Download a **Desktop app** OAuth client, rename it `credentials.json`, and place
 ### Gmail scan or Trash action fails
 
 Check network access, Gmail API enablement, consent-screen status, account allowlisting, API quota, and grant validity. The app stops safely and never falls back to permanent deletion.
+
+## Contributing
+
+Contributions are welcome. If you want to help:
+
+1. Open an issue describing the bug, UX friction, or improvement idea.
+2. Fork the repo and create a focused branch.
+3. Submit a PR with clear before/after behavior.
+
+Please keep safety and privacy guarantees intact, especially around OAuth handling and message deletion boundaries.
+
+## Support this project
+
+If this project helps you, consider:
+
+- ⭐ Starring the repo
+- 🐛 Reporting bugs
+- 💡 Suggesting features
+- 🔁 Sharing it with others who manage large Gmail inboxes
 
 ## License
 
